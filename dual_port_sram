@@ -1,0 +1,134 @@
+module dual_port_sram (
+    input wire clk,           // 100 MHz system clock
+    input wire rst,           // Reset (btnC)
+    input wire [11:0] sw,     // sw[7:0] = data, sw[9:8] = addr A, sw[11:10] = addr B
+    input wire btnL,          // Write Enable A
+    input wire btnR,          // Write Enable B
+    output reg [7:0] led,     // Output from Port A
+    output reg [6:0] seg,     // 7-segment segments
+    output reg [3:0] an       // 7-segment anodes
+);
+
+    // === Slow Clock (1 Hz) ===
+    reg [25:0] clk_div;
+    reg slow_clk;
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            clk_div <= 0;
+            slow_clk <= 0;
+        end else begin
+            if (clk_div == 26'd49999999) begin
+                clk_div <= 0;
+                slow_clk <= ~slow_clk;
+            end else begin
+                clk_div <= clk_div + 1;
+            end
+        end
+    end
+
+    // === Edge Detection for Button Presses ===
+    reg btnL_prev = 0, btnR_prev = 0;
+    wire we_a = btnL & ~btnL_prev;
+    wire we_b = btnR & ~btnR_prev;
+
+    always @(posedge slow_clk or posedge rst) begin
+        if (rst) begin
+            btnL_prev <= 0;
+            btnR_prev <= 0;
+        end else begin
+            btnL_prev <= btnL;
+            btnR_prev <= btnR;
+        end
+    end
+
+    // === SRAM Logic ===
+    reg [7:0] mem [0:3];  // 4 x 8-bit memory
+    reg [7:0] dout_a, dout_b;
+    wire [1:0] addr_a = sw[9:8];
+    wire [1:0] addr_b = sw[11:10];
+    wire [7:0] data_in = sw[7:0];
+
+    integer i;
+    always @(posedge slow_clk or posedge rst) begin
+        if (rst) begin
+            dout_a <= 8'd0;
+            dout_b <= 8'd0;
+            for (i = 0; i < 4; i = i + 1)
+                mem[i] <= 8'd0;
+        end else begin
+            if (we_a) mem[addr_a] <= data_in;
+            if (we_b) mem[addr_b] <= data_in;
+
+            dout_a <= mem[addr_a];
+            dout_b <= mem[addr_b];
+        end
+    end
+
+    // === Port A Output to LEDs ===
+    always @(posedge slow_clk or posedge rst) begin
+        if (rst)
+            led <= 8'd0;
+        else
+            led <= dout_a;
+    end
+
+    // === 7-Segment Multiplexing for Port B Output ===
+    reg [3:0] hex;
+    reg [1:0] digit_sel;
+    reg [15:0] refresh_counter;
+
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            refresh_counter <= 0;
+            digit_sel <= 0;
+        end else begin
+            refresh_counter <= refresh_counter + 1;
+            digit_sel <= refresh_counter[15:14]; // ~1 kHz refresh rate
+        end
+    end
+
+    always @(*) begin
+        case (digit_sel)
+            2'b00: begin
+                hex = dout_b[3:0];  // Low nibble
+                an = 4'b1110;
+            end
+            2'b01: begin
+                hex = dout_b[7:4];  // High nibble
+                an = 4'b1101;
+            end
+            2'b10: begin
+                hex = 4'd0;         // Blank or default
+                an = 4'b1011;
+            end
+            2'b11: begin
+                hex = 4'd0;         // Blank or default
+                an = 4'b0111;
+            end
+        endcase
+    end
+
+    // === Hex to 7-segment Decoder ===
+    always @(*) begin
+        case (hex)
+            4'h0: seg = 7'b1000000;
+            4'h1: seg = 7'b1111001;
+            4'h2: seg = 7'b0100100;
+            4'h3: seg = 7'b0110000;
+            4'h4: seg = 7'b0011001;
+            4'h5: seg = 7'b0010010;
+            4'h6: seg = 7'b0000010;
+            4'h7: seg = 7'b1111000;
+            4'h8: seg = 7'b0000000;
+            4'h9: seg = 7'b0010000;
+            4'hA: seg = 7'b0001000;
+            4'hB: seg = 7'b0000011;
+            4'hC: seg = 7'b1000110;
+            4'hD: seg = 7'b0100001;
+            4'hE: seg = 7'b0000110;
+            4'hF: seg = 7'b0001110;
+            default: seg = 7'b1111111; // Blank
+        endcase
+    end
+
+endmodule
